@@ -9,12 +9,37 @@ import (
 )
 
 func main() {
-	// Считываем переменные окружения
+	// Считываем переменные окружения с дефолтами
 	targetDomain := os.Getenv("TARGET_DOMAIN")
+	if targetDomain == "" {
+		targetDomain = "https://default-domain.com"
+	}
+
 	apiPrefix := os.Getenv("API_PREFIX")
+	if apiPrefix == "" {
+		apiPrefix = "/api/"
+	}
+
 	listenPort := os.Getenv("LISTEN_PORT")
-	certFile := "/etc/letsencrypt/live/your_domain/cert.pem"
-	keyFile := "/etc/letsencrypt/live/your_domain/privkey.pem"
+	if listenPort == "" {
+		listenPort = "8080"
+	}
+
+	certFile := os.Getenv("CERT_FILE")
+	if certFile == "" {
+		certFile = "/etc/letsencrypt/live/your_domain/cert.pem"
+	}
+
+	keyFile := os.Getenv("KEY_FILE")
+	if keyFile == "" {
+		keyFile = "/etc/letsencrypt/live/your_domain/privkey.pem"
+	}
+
+	debugMode := os.Getenv("DEBUG_MODE")
+	if debugMode == "" {
+		debugMode = "False"
+	}
+
 	http.HandleFunc(apiPrefix, func(w http.ResponseWriter, r *http.Request) {
 		// Логируем запрос
 		requestDump, err := httputil.DumpRequest(r, true)
@@ -56,6 +81,12 @@ func main() {
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 	})
-	log.Println("Starting HTTPS server on :" + listenPort)
-	log.Fatal(http.ListenAndServeTLS(":"+listenPort, certFile, keyFile, nil))
+
+	if debugMode == "True" {
+		log.Println("Starting HTTP server on :" + listenPort)
+		log.Fatal(http.ListenAndServe(":"+listenPort, nil))
+	} else {
+		log.Println("Starting HTTPS server on :" + listenPort)
+		log.Fatal(http.ListenAndServeTLS(":"+listenPort, certFile, keyFile, nil))
+	}
 }

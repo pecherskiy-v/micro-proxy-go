@@ -1,92 +1,142 @@
 package main
 
 import (
-	"io"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 func main() {
-	// Считываем переменные окружения с дефолтами
+	var startTime = time.Now()
+
 	targetDomain := os.Getenv("TARGET_DOMAIN")
-	if targetDomain == "" {
-		targetDomain = "https://default-domain.com"
-	}
-
-	apiPrefix := os.Getenv("API_PREFIX")
-	if apiPrefix == "" {
-		apiPrefix = "/api/"
-	}
-
 	listenPort := os.Getenv("LISTEN_PORT")
+	loggingFlag := os.Getenv("LOGGING_FLAG")
+
+	var statFlag bool
+	flag.BoolVar(&statFlag, "stat", false, "Enable statistics")
+	flag.Parse()
+
+	if targetDomain == "" {
+		targetDomain = "default-domain.com"
+	}
 	if listenPort == "" {
 		listenPort = "8080"
 	}
-
-	certFile := os.Getenv("CERT_FILE")
-	if certFile == "" {
-		certFile = "/etc/letsencrypt/live/your_domain/cert.pem"
+	if loggingFlag == "" {
+		loggingFlag = "off"
 	}
 
-	keyFile := os.Getenv("KEY_FILE")
-	if keyFile == "" {
-		keyFile = "/etc/letsencrypt/live/your_domain/privkey.pem"
-	}
+	var (
+		mu           sync.Mutex
+		requests     int
+		maxRPS       int
+		minLatency   time.Duration
+		maxLatency   time.Duration
+		totalLatency time.Duration
+		previousRPS  int
+	)
+	if statFlag {
+		go func() {
+			for {
+				fmt.Print("\033[?25l")       // Скрыть курсор
+				defer fmt.Print("\033[?25h") // Показать курсор при выходе
+				time.Sleep(time.Second)
 
-	debugMode := os.Getenv("DEBUG_MODE")
-	if debugMode == "" {
-		debugMode = "False"
-	}
+				// Получаем статистику CPU
+				cpuPercent, _ := cpu.Percent(0, false)
+				cpuLoad := cpuPercent[0]
 
-	http.HandleFunc(apiPrefix, func(w http.ResponseWriter, r *http.Request) {
-		// Логируем запрос
-		requestDump, err := httputil.DumpRequest(r, true)
-		if err != nil {
-			http.Error(w, "Error reading request", 500)
-			return
-		}
-		log.Println(string(requestDump))
+				// Получаем статистику памяти
+				memory, _ := mem.VirtualMemory()
+				memUsage := memory.UsedPercent
 
-		// Создаем новый запрос на основе пришедшего
-		req, err := http.NewRequest(r.Method, targetDomain+r.RequestURI, r.Body)
-		if err != nil {
-			http.Error(w, "Error creating request", 500)
-			return
-		}
+				mu.Lock()
+				rps := requests - previousRPS
+				previousRPS = requests
+				if rps > maxRPS {
+					maxRPS = rps
+				}
+				avgLatency := "N/A"
+				if requests > 0 {
+					avgLatency = (totalLatency / time.Duration(requests)).String()
+				}
 
-		// Копируем заголовки
-		for name, values := range r.Header {
-			for _, value := range values {
-				req.Header.Add(name, value)
+				uptime := time.Since(startTime).Round(time.Second)
+
+				// Оформляем значения в рамках, если нужно
+				cpuStr := fmt.Sprintf("%.2f%%", cpuLoad)
+				memStr := fmt.Sprintf("%.2f%%", memUsage)
+
+				if cpuLoad > 70 {
+					cpuStr = "[" + cpuStr + "]"
+				}
+				if memUsage > 70 {
+					memStr = "[" + memStr + "]"
+				}
+
+				// Собираем всю статистику в одну строку
+				stats := fmt.Sprintf("\r\033[35mUptime: %s\033[0m | \033[36mCurrent RPS: %d\033[0m | \033[35mMax RPS: %d\033[0m | \033[32mMin Latency: %s\033[0m | \033[34mMax Latency: %s\033[0m | \033[33mAvg Latency: %s\033[0m | \033[31mCPU: %s\033[0m | \033[32mRAM: %s\033[0m",
+					uptime, rps, maxRPS, minLatency, maxLatency, avgLatency, cpuStr, memStr)
+
+				padding := 150 - len(stats)
+				if padding < 0 {
+					padding = 0
+				}
+				fmt.Printf("%s%s", stats, strings.Repeat(" ", padding))
+				mu.Unlock()
 			}
-		}
+		}()
+	}
 
-		// Выполняем запрос
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			http.Error(w, "Error making proxy request", 500)
-			return
-		}
-		defer resp.Body.Close()
-
-		// Копируем ответ
-		for name, values := range resp.Header {
-			for _, value := range values {
-				w.Header().Add(name, value)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{
+		Scheme: "https",
+		Host:   targetDomain,
 	})
 
-	if debugMode == "True" {
-		log.Println("Starting HTTP server on :" + listenPort)
-		log.Fatal(http.ListenAndServe(":"+listenPort, nil))
-	} else {
-		log.Println("Starting HTTPS server on :" + listenPort)
-		log.Fatal(http.ListenAndServeTLS(":"+listenPort, certFile, keyFile, nil))
+	proxy.Director = func(req *http.Request) {
+		start := time.Now()
+		req.URL.Scheme = "https"
+		req.URL.Host = targetDomain
+		req.Host = targetDomain
+
+		if loggingFlag == "on" {
+			log.Printf("Forwarding request to: %s", req.URL.String())
+			log.Printf("Request headers: %v", req.Header)
+		}
+
+		mu.Lock()
+		requests++
+		latency := time.Since(start)
+		if latency > maxLatency {
+			maxLatency = latency
+		}
+		if minLatency == 0 || latency < minLatency {
+			minLatency = latency
+		}
+		totalLatency += latency
+		mu.Unlock()
 	}
+
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if loggingFlag == "on" {
+			log.Printf("Received response with status code: %d", resp.StatusCode)
+			log.Printf("Response headers: %v", resp.Header)
+		}
+		return nil
+	}
+
+	http.Handle("/", proxy)
+	log.Printf("Server running on :%s", listenPort)
+	log.Fatal(http.ListenAndServe(":"+listenPort, nil))
 }

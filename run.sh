@@ -52,7 +52,7 @@ else
     exit 1
 fi
 
-# Чтение переменных окружения из ini файла в ассоциативный массив
+# Чтение переменных окружения из ini файла
 #declare -A config
 while IFS="=" read -r key value; do
   eval "config_$key=$value"
@@ -61,7 +61,7 @@ done < config.ini
 # Если режим не тихий, задаем вопросы
 if [ "$SILENT" = false ]; then
   # Устанавливаем значения по умолчанию
-  default_domain=${config_YOUR_DOMAIN:-"example.com"}  # Заметь, тут config_YOUR_DOMAIN, а не config[YOUR_DOMAIN]
+  default_domain=${config_YOUR_DOMAIN:-"example.com"}
   default_target_domain=${config_TARGET_DOMAIN:-"target.example.com"}
   default_listen_port=${config_LISTEN_PORT:-"8080"}
   default_cert_path=${config_CERT_PATH:-"/etc/letsencrypt/live/your_domain_name/fullchain.pem"}
@@ -82,12 +82,26 @@ if [ "$SILENT" = false ]; then
 
   read -p "Введите путь к приватному ключу (по умолчанию: $default_key_path): " input
   KEY_PATH=${input:-$default_key_path}
+
+  # Удаляем старые значения из config.ini
+  sed -i.bak '/YOUR_DOMAIN/d' config.ini
+  sed -i.bak '/TARGET_DOMAIN/d' config.ini
+  sed -i.bak '/LISTEN_PORT/d' config.ini
+  sed -i.bak '/CERT_PATH/d' config.ini
+  sed -i.bak '/KEY_PATH/d' config.ini
+
+  # Удалить бэкап файлы созданные sed на macOS
+  rm -f config.ini.bak
+
+
+  # Записываем новые значения в config.ini
+  echo "YOUR_DOMAIN=$YOUR_DOMAIN" >> config.ini
+  echo "TARGET_DOMAIN=$TARGET_DOMAIN" >> config.ini
+  echo "LISTEN_PORT=$LISTEN_PORT" >> config.ini
+  echo "CERT_PATH=$CERT_PATH" >> config.ini
+  echo "KEY_PATH=$KEY_PATH" >> config.ini
 fi
 
-# Экспорт переменных окружения
-for key in "${!config[@]}"; do
-  export $key=${config[$key]}
-done
 
 # Читаем переменные окружения из ini файла
 export $(awk -F "=" '{print $1"="$2}' config.ini)
@@ -114,19 +128,19 @@ fi
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # Используем `which go`, чтобы найти путь к Go
     GO_EXEC_PATH=$(which go)
-    echo "GO_EXEC_PATH=$GO_EXEC_PATH"  # <-- Добавлено
+#    echo "GO_EXEC_PATH=$GO_EXEC_PATH"
 
     # Получаем реальный путь к Go
     REAL_GO_PATH=$(readlink -f $GO_EXEC_PATH)
 
     # Ищем libexec относительно найденного пути
     POSSIBLE_GOROOT=$(dirname $(dirname $REAL_GO_PATH))
-    echo "POSSIBLE_GOROOT=$POSSIBLE_GOROOT"  # <-- Добавлено
+#    echo "POSSIBLE_GOROOT=$POSSIBLE_GOROOT"
 
     # Проверяем, существует ли папка libexec
     if [ -d "$POSSIBLE_GOROOT" ]; then
         export GOROOT=$POSSIBLE_GOROOT
-        echo "Установлен GOROOT=$GOROOT"
+#        echo "Установлен GOROOT=$GOROOT"
     else
         echo "Не могу найти папку libexec рядом с Go. Все плохо."
         exit 1
@@ -185,5 +199,5 @@ EOL
     sudo rc-service proxy start
 elif [[ "$INIT_SYSTEM" == "macOS" ]]; then
     # Запускаем скомпилированное приложение с флагом -stat на macOS
-    $SCRIPT_DIR/proxy -stat
+    $SCRIPT_DIR/proxy -stat -https=off
 fi

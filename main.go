@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -23,15 +24,17 @@ func main() {
 	listenPort := os.Getenv("LISTEN_PORT")
 	loggingFlag := os.Getenv("LOGGING_FLAG")
 
+	var httpsFlag string
 	var statFlag bool
 	flag.BoolVar(&statFlag, "stat", false, "Enable statistics")
+	flag.StringVar(&httpsFlag, "https", "on", "Disable HTTPS if set to 'off'")
 	flag.Parse()
 
 	if targetDomain == "" {
 		targetDomain = "default-domain.com"
 	}
 	if listenPort == "" {
-		listenPort = "8080"
+		listenPort = "8888"
 	}
 	if loggingFlag == "" {
 		loggingFlag = "off"
@@ -136,7 +139,31 @@ func main() {
 		return nil
 	}
 
+	log.Printf("Target domain : [%s]", targetDomain)
 	http.Handle("/", proxy)
-	log.Printf("Server running on :%s", listenPort)
-	log.Fatal(http.ListenAndServe(":"+listenPort, nil))
+	if httpsFlag == "off" {
+		log.Printf("HTTPS mode disabled. Server running on : [%s]", listenPort)
+		log.Fatal(http.ListenAndServe(":"+listenPort, nil))
+	} else {
+		certPath := os.Getenv("CERT_PATH") // Получаем путь к сертификату
+		keyPath := os.Getenv("KEY_PATH")   // Получаем путь к ключу
+		if certPath == "" || keyPath == "" {
+			log.Fatal("CERT_PATH or KEY_PATH is not set")
+		}
+
+		// Настройки TLS
+		tlsConfig := &tls.Config{
+			// ... (другие опции, если нужны)
+		}
+
+		// HTTPS сервер
+		server := &http.Server{
+			Addr:      ":" + listenPort,
+			Handler:   nil, // Используем http.DefaultServeMux
+			TLSConfig: tlsConfig,
+		}
+
+		log.Printf("HTTPS mode enabled. Server running on : [%s]", listenPort)
+		log.Fatal(server.ListenAndServeTLS(certPath, keyPath))
+	}
 }

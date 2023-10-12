@@ -164,7 +164,7 @@ if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     ExecStart=$SCRIPT_DIR/proxy
     Restart=always
     EnvironmentFile=$SCRIPT_DIR/config.ini
-    User=nobody
+    User=root
     RestartSec=3
     LimitNOFILE=4096
 
